@@ -52,7 +52,11 @@ def main(size, runtimes, datatype, device, iterations):
 
    print("[INFO] Loading the model...")
    core = ov.Core()
-   compiled_model = core.compile_model(model_filename, device_name=device_name)
+   
+   model = core.read_model(model_filename)
+   model.reshape({inp: [grid_size, grid_size] for inp in model.inputs})
+
+   compiled_model = core.compile_model(model, device_name=device_name)
 
    print("[INFO] Creating GEMM inputs...")
    matrix_a = (torch.rand(grid_size, grid_size, dtype=torch_dtype)).numpy()
