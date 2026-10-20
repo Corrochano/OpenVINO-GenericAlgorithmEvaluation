@@ -15,11 +15,45 @@ limitations under the License.
 """
 
 import argparse
+import json
 import math
 import time
+from pathlib import Path
 
 import openvino as ov
 import numpy as np
+
+
+def read_rapl_counters():
+   counters = {}
+   powercap_path = Path("/sys/class/powercap")
+   for package_path in powercap_path.glob("intel-rapl:*"):
+      domain_paths = [package_path, *package_path.glob("intel-rapl:*")]
+      for domain_path in domain_paths:
+         try:
+            name = (domain_path / "name").read_text().strip()
+            energy_uj = int((domain_path / "energy_uj").read_text())
+            max_energy_uj = int((domain_path / "max_energy_range_uj").read_text())
+         except (OSError, ValueError):
+            continue
+         counters[f"{name}_{domain_path.name}"] = (energy_uj, max_energy_uj)
+   return counters or None
+
+
+def rapl_energy_delta(start_counters, end_counters):
+   if not start_counters or not end_counters:
+      return None
+
+   energy_joules = {}
+   for domain, (start_uj, max_energy_uj) in start_counters.items():
+      if domain not in end_counters:
+         continue
+      end_uj, end_max_energy_uj = end_counters[domain]
+      if max_energy_uj != end_max_energy_uj:
+         continue
+      energy_joules[domain] = round(((end_uj - start_uj) % max_energy_uj) / 1_000_000, 6)
+   return energy_joules or None
+
 
 def main(grid_size, iterations, runtimes, datatype, device):
    if datatype == "fp32":
@@ -62,6 +96,7 @@ def main(grid_size, iterations, runtimes, datatype, device):
 
    print("[INFO] Running inference...")
    minTime = math.inf
+   energy_start = read_rapl_counters()
    start_time = time.perf_counter()
    for _ in range(runtimes):
       start_local_time = time.perf_counter()
@@ -69,17 +104,23 @@ def main(grid_size, iterations, runtimes, datatype, device):
       local_elapsed_time = time.perf_counter() - start_local_time
       minTime = min(minTime, local_elapsed_time)
    elapsed_time = (time.perf_counter() - start_time) / runtimes
+   energy_by_domain = rapl_energy_delta(energy_start, read_rapl_counters())
 
    print("****************************************************************************************************************************")
    print(f"Jacobi of size {grid_size}x{grid_size} with {iterations} iterations in {datatype} took {elapsed_time:.4f} seconds.")
    print(f"Max Performance took {minTime:.4f} seconds")
+   if energy_by_domain:
+      print(f"RAPL energy for {runtimes} inference run(s): {json.dumps(energy_by_domain, sort_keys=True)} J")
+   else:
+      print("RAPL energy unavailable; run with MEASURE_ENERGY=1 to access root-only counters.")
    print("****************************************************************************************************************************")
 
    log_filename = f"jacobi_{grid_size}x{grid_size}_{device}.csv"
    with open(log_filename, "a") as output_file:
       if output_file.tell() == 0:
-         output_file.write("datatype;iterations;MeanTime;PeakTime\n")
-      output_file.write(f"{datatype};{iterations};{elapsed_time:.4f};{minTime:.4f}\n")
+         output_file.write("datatype;iterations;MeanTime;PeakTime;EnergyByDomain_J\n")
+      energy_field = json.dumps(energy_by_domain, sort_keys=True) if energy_by_domain else ""
+      output_file.write(f"{datatype};{iterations};{elapsed_time:.4f};{minTime:.4f};{energy_field}\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the OpenVINO Jacobi model.")
