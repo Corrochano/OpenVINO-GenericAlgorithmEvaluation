@@ -49,8 +49,8 @@ def main(matrix_size, datatype):
   print("--------------------------")
   print("Creating matrix...")
   print("--------------------------\n")
-  example_A = torch.rand(matrix_size, matrix_size, dtype=torchfloat)
-  example_B = torch.rand(matrix_size, matrix_size, dtype=torchfloat)
+  example_A = (torch.rand(matrix_size, matrix_size, dtype=torchfloat)).numpy()
+  example_B = (torch.rand(matrix_size, matrix_size, dtype=torchfloat)).numpy()
 
   print("--------------------------")
   print("Testing the PyTorch model:")

@@ -43,7 +43,6 @@ def main(size, runtimes, datatype, device, iterations):
       "cpu": "CPU",
       "gpu": "GPU",
       "npu": "NPU",
-      "ane": "AUTO",
       "all": "AUTO",
    }
    device_name = device_names.get(device.lower())
@@ -56,8 +55,8 @@ def main(size, runtimes, datatype, device, iterations):
    compiled_model = core.compile_model(model_filename, device_name=device_name)
 
    print("[INFO] Creating GEMM inputs...")
-   matrix_a = torch.rand(grid_size, grid_size, dtype=torch_dtype)
-   matrix_b = torch.rand(grid_size, grid_size, dtype=torch_dtype)
+   matrix_a = (torch.rand(grid_size, grid_size, dtype=torch_dtype)).numpy()
+   matrix_b = (torch.rand(grid_size, grid_size, dtype=torch_dtype)).numpy()
 
    print("[INFO] Running inference...")
    minTime = math.inf
@@ -96,7 +95,7 @@ if __name__ == "__main__":
     parser.add_argument("iteration_input", type=int, help="iteration count")
     parser.add_argument("int_input", type=int, help="number of inference runs")
     parser.add_argument("datatype_input", type=str, help="datatype: fp32/fp16")
-    parser.add_argument("device_input", type=str, help="device: cpu/gpu/npu/ane/all")
+    parser.add_argument("device_input", type=str, help="device: cpu/gpu/npu/all")
 
     args = parser.parse_args()
     if args.float_input <= 0 or args.int_input <= 0:

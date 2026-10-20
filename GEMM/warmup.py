@@ -32,8 +32,8 @@ def main(device):
     )
 
     print("[INFO] Creating GEMM inputs...")
-    matrix_a = torch.rand(1024, 1024, dtype=torch.float16)
-    matrix_b = torch.rand(1024, 1024, dtype=torch.float16)
+    matrix_a = (torch.rand(1024, 1024, dtype=torch.float16)).numpy()
+    matrix_b = (torch.rand(1024, 1024, dtype=torch.float16)).numpy()
 
     print("[INFO] Running warmup...")
     for _ in range(100):
