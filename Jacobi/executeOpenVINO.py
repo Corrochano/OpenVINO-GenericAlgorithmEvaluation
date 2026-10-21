@@ -17,6 +17,7 @@ limitations under the License.
 import argparse
 import json
 import math
+import subprocess
 import time
 from pathlib import Path
 
@@ -25,18 +26,48 @@ import numpy as np
 
 
 def read_rapl_counters():
-   counters = {}
    powercap_path = Path("/sys/class/powercap")
+   domain_paths = []
    for package_path in powercap_path.glob("intel-rapl:*"):
-      domain_paths = [package_path, *package_path.glob("intel-rapl:*")]
-      for domain_path in domain_paths:
-         try:
-            name = (domain_path / "name").read_text().strip()
-            energy_uj = int((domain_path / "energy_uj").read_text())
-            max_energy_uj = int((domain_path / "max_energy_range_uj").read_text())
-         except (OSError, ValueError):
-            continue
-         counters[f"{name}_{domain_path.name}"] = (energy_uj, max_energy_uj)
+      domain_paths.extend([package_path, *package_path.glob("intel-rapl:*")])
+
+   counter_files = [
+      domain_path / field
+      for domain_path in domain_paths
+      for field in ("name", "energy_uj", "max_energy_range_uj")
+      if all((domain_path / required_field).is_file()
+             for required_field in ("name", "energy_uj", "max_energy_range_uj"))
+   ]
+   if not counter_files:
+      return None
+
+   try:
+      values = [counter_file.read_text().strip() for counter_file in counter_files]
+   except OSError:
+      try:
+         result = subprocess.run(
+            ["sudo", "-n", "cat", *(str(counter_file) for counter_file in counter_files)],
+            capture_output=True,
+            check=True,
+            text=True,
+         )
+      except (OSError, subprocess.CalledProcessError):
+         return None
+      values = result.stdout.splitlines()
+
+   if len(values) != len(counter_files):
+      return None
+
+   counters = {}
+   for index in range(0, len(values), 3):
+      try:
+         name, energy_uj, max_energy_uj = values[index:index + 3]
+         counters[f"{name}_{counter_files[index].parent.name}"] = (
+            int(energy_uj),
+            int(max_energy_uj),
+         )
+      except ValueError:
+         continue
    return counters or None
 
 
@@ -103,14 +134,20 @@ def main(grid_size, iterations, runtimes, datatype, device):
       compiled_model(inputs)
       local_elapsed_time = time.perf_counter() - start_local_time
       minTime = min(minTime, local_elapsed_time)
-   elapsed_time = (time.perf_counter() - start_time) / runtimes
+   total_elapsed_time = time.perf_counter() - start_time
+   elapsed_time = total_elapsed_time / runtimes
    energy_by_domain = rapl_energy_delta(energy_start, read_rapl_counters())
+   power_by_domain_mw = {
+      domain: round(energy_joules * 1000 / total_elapsed_time, 3)
+      for domain, energy_joules in energy_by_domain.items()
+   } if energy_by_domain else None
 
    print("****************************************************************************************************************************")
    print(f"Jacobi of size {grid_size}x{grid_size} with {iterations} iterations in {datatype} took {elapsed_time:.4f} seconds.")
    print(f"Max Performance took {minTime:.4f} seconds")
    if energy_by_domain:
       print(f"RAPL energy for {runtimes} inference run(s): {json.dumps(energy_by_domain, sort_keys=True)} J")
+      print(f"Average RAPL power: {json.dumps(power_by_domain_mw, sort_keys=True)} mW")
    else:
       print("RAPL energy unavailable; run with MEASURE_ENERGY=1 to access root-only counters.")
    print("****************************************************************************************************************************")
@@ -118,9 +155,27 @@ def main(grid_size, iterations, runtimes, datatype, device):
    log_filename = f"jacobi_{grid_size}x{grid_size}_{device}.csv"
    with open(log_filename, "a") as output_file:
       if output_file.tell() == 0:
-         output_file.write("datatype;iterations;MeanTime;PeakTime;EnergyByDomain_J\n")
-      energy_field = json.dumps(energy_by_domain, sort_keys=True) if energy_by_domain else ""
-      output_file.write(f"{datatype};{iterations};{elapsed_time:.4f};{minTime:.4f};{energy_field}\n")
+         output_file.write("datatype;iterations;MeanTime;PeakTime\n")
+      output_file.write(f"{datatype};{iterations};{elapsed_time:.4f};{minTime:.4f}\n")
+
+   if energy_by_domain:
+      energy_log_filename = f"jacobi_energy_{grid_size}x{grid_size}_{device}.csv"
+      with open(energy_log_filename, "a") as output_file:
+         if output_file.tell() == 0:
+            output_file.write("datatype;iterations;runtimes;EnergyByDomain_J\n")
+         output_file.write(
+            f"{datatype};{iterations};{runtimes};"
+            f"{json.dumps(energy_by_domain, sort_keys=True)}\n"
+         )
+
+      power_log_filename = f"jacobi_power_{grid_size}x{grid_size}_{device}.csv"
+      with open(power_log_filename, "a") as output_file:
+         if output_file.tell() == 0:
+            output_file.write("datatype;iterations;runtimes;AveragePowerByDomain_mW\n")
+         output_file.write(
+            f"{datatype};{iterations};{runtimes};"
+            f"{json.dumps(power_by_domain_mw, sort_keys=True)}\n"
+         )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the OpenVINO Jacobi model.")
