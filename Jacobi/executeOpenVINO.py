@@ -110,6 +110,7 @@ def main(grid_size, iterations, runtimes, datatype, device):
    print("[INFO] Loading the model...")
    core = ov.Core()
    model = core.read_model(model_filename)
+   model.reshape({model_input: [1, 1, grid_size, grid_size] for model_input in model.inputs})
    compiled_model = core.compile_model(model, device_name=device_name)
 
    print("[INFO] Creating Jacobi inputs...")
