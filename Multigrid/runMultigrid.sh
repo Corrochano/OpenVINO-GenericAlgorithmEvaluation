@@ -8,7 +8,7 @@ cd "$script_dir"
 runs="${RUNS:-1}"
 iterations=100
 measure_energy="${MEASURE_ENERGY:-0}"
-devices_text="${DEVICES:-cpu gpu}"
+devices_text="${DEVICES:-cpu gpu npu}"
 read -r -a devices <<< "$devices_text"
 if [[ ! "$runs" =~ ^[1-9][0-9]*$ ]]; then
     printf 'RUNS must be a positive integer.\n' >&2

@@ -30,7 +30,13 @@ class MyMachine(nn.Module):
         self.nt = torch.tensor(nt, dtype=self.datatype)
 
     def restriction(self, residual): # Applied when we want to convert from finegrid to coarsergrid
-        return nn.AvgPool2d(kernel_size=2)(residual)
+        kernel = torch.full(
+            (1, 1, 2, 2),
+            0.25,
+            dtype=residual.dtype,
+            device=residual.device,
+        )
+        return F.conv2d(residual, kernel, stride=2)
     
     def interpolate(self, f, target_size): # Applied when we want to convert from coarsergrid to finegrid
         return F.interpolate(f, size=target_size, mode='bilinear', align_corners=False)
