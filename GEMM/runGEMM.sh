@@ -6,9 +6,21 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$script_dir"
 
 runs="${RUNS:-1}"
+measure_energy="${MEASURE_ENERGY:-0}"
 if [[ ! "$runs" =~ ^[1-9][0-9]*$ ]]; then
     printf 'RUNS must be a positive integer.\n' >&2
     exit 2
+fi
+if [[ "$measure_energy" != 0 && "$measure_energy" != 1 ]]; then
+    printf 'MEASURE_ENERGY must be 0 or 1.\n' >&2
+    exit 2
+fi
+if [[ "$measure_energy" == 1 ]]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        printf 'sudo is required when MEASURE_ENERGY=1.\n' >&2
+        exit 2
+    fi
+    sudo -v || exit 2
 fi
 
 sizes=(256 512 1024 2048 4096 8192)
@@ -20,6 +32,11 @@ for size in "${sizes[@]}"; do
     for datatype in "${datatypes[@]}"; do
         for device in "${devices[@]}"; do
             printf '\n[INFO] Running %s GEMM %s (%s runs)\n' "$device" "$size" "$datatype" "$runs"
+            if [[ "$measure_energy" == 1 ]] && ! sudo -v; then
+                printf '[ERROR] Could not refresh sudo authorization for RAPL reads.\n' >&2
+                failures=$((failures + 1))
+                continue
+            fi
             if ! python3 "$script_dir/executeOpenVINO.py" "$size" 1 "$runs" "$datatype" "$device"; then
                 printf '[ERROR] Failed: %s %s %s\n' "$device" "$size" "$datatype" >&2
                 failures=$((failures + 1))

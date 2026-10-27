@@ -39,6 +39,11 @@ for size in "${sizes[@]}"; do
         fi
         for device in "${devices[@]}"; do
             printf '\n[INFO] Running %s Jacobi %s (%s runs)\n' "$device" "$size" "$datatype" "$runs"
+            if [[ "$measure_energy" == 1 ]] && ! sudo -v; then
+                printf '[ERROR] Could not refresh sudo authorization for RAPL reads.\n' >&2
+                failures=$((failures + 1))
+                continue
+            fi
             if ! python3 "$script_dir/executeOpenVINO.py" "$size" "$iterations" "$runs" "$datatype" "$device"; then
                 printf '[ERROR] Failed: %s %s %s\n' "$device" "$size" "$datatype" >&2
                 failures=$((failures + 1))

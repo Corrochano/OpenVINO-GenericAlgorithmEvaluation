@@ -15,12 +15,82 @@ limitations under the License.
 """
 
 import argparse
+import json
 import math
 import os
+import subprocess
 import time
+from pathlib import Path
 
 import openvino as ov
 import torch
+
+
+def read_rapl_counters():
+   powercap_path = Path("/sys/class/powercap")
+   domain_paths = []
+   for package_path in powercap_path.glob("intel-rapl:*"):
+      domain_paths.extend([package_path, *package_path.glob("intel-rapl:*")])
+
+   counter_files = [
+      domain_path / field
+      for domain_path in domain_paths
+      for field in ("name", "energy_uj", "max_energy_range_uj")
+      if all(
+         (domain_path / required_field).is_file()
+         for required_field in ("name", "energy_uj", "max_energy_range_uj")
+      )
+   ]
+   if not counter_files:
+      return None
+
+   try:
+      values = [counter_file.read_text().strip() for counter_file in counter_files]
+   except OSError:
+      try:
+         result = subprocess.run(
+            ["sudo", "-n", "cat", *(str(counter_file) for counter_file in counter_files)],
+            capture_output=True,
+            check=True,
+            text=True,
+         )
+      except (OSError, subprocess.CalledProcessError):
+         return None
+      values = result.stdout.splitlines()
+
+   if len(values) != len(counter_files):
+      return None
+
+   counters = {}
+   for index in range(0, len(values), 3):
+      try:
+         name, energy_uj, max_energy_uj = values[index:index + 3]
+         counters[f"{name}_{counter_files[index].parent.name}"] = (
+            int(energy_uj),
+            int(max_energy_uj),
+         )
+      except ValueError:
+         continue
+   return counters or None
+
+
+def rapl_energy_delta(start_counters, end_counters):
+   if not start_counters or not end_counters:
+      return None
+
+   energy_joules = {}
+   for domain, (start_uj, max_energy_uj) in start_counters.items():
+      if domain not in end_counters:
+         continue
+      end_uj, end_max_energy_uj = end_counters[domain]
+      if max_energy_uj != end_max_energy_uj:
+         continue
+      energy_joules[domain] = round(
+         ((end_uj - start_uj) % max_energy_uj) / 1_000_000,
+         6,
+      )
+   return energy_joules or None
+
 
 def main(size, runtimes, datatype, device, iterations):
    if size.is_integer():
@@ -64,17 +134,29 @@ def main(size, runtimes, datatype, device, iterations):
 
    print("[INFO] Running inference...")
    minTime = math.inf
+   energy_start = read_rapl_counters()
    start_time = time.perf_counter()
    for _ in range(runtimes):
       start_local_time = time.perf_counter()
       compiled_model([matrix_a, matrix_b])
       local_elapsed_time = time.perf_counter() - start_local_time
       minTime = min(minTime, local_elapsed_time)
-   elapsed_time = (time.perf_counter() - start_time) / runtimes
+   total_elapsed_time = time.perf_counter() - start_time
+   elapsed_time = total_elapsed_time / runtimes
+   energy_by_domain = rapl_energy_delta(energy_start, read_rapl_counters())
+   power_by_domain_mw = {
+      domain: round(energy_joules * 1000 / total_elapsed_time, 3)
+      for domain, energy_joules in energy_by_domain.items()
+   } if energy_by_domain else None
 
    print("****************************************************************************************************************************")
    print(f"GEMM of size {grid_size}x{grid_size} with {iterations} iterations in {datatype} took {elapsed_time:.4f} seconds.")
    print(f"Max Performance took {minTime:.4f} seconds")
+   if energy_by_domain:
+      print(f"RAPL energy for {runtimes} inference run(s): {json.dumps(energy_by_domain, sort_keys=True)} J")
+      print(f"Average RAPL power: {json.dumps(power_by_domain_mw, sort_keys=True)} mW")
+   else:
+      print("RAPL energy unavailable; check sudo authorization and Linux RAPL availability.")
    print("****************************************************************************************************************************")
 
    log_filename = f"gemm_{grid_size}x{grid_size}_{device}.csv"
@@ -92,6 +174,25 @@ def main(size, runtimes, datatype, device, iterations):
 
    with open(log_filename, "a") as output_file:
       output_file.write(log_content)
+
+   if energy_by_domain:
+      energy_filename = f"gemm_energy_{grid_size}x{grid_size}_{device}.csv"
+      with open(energy_filename, "a") as output_file:
+         if output_file.tell() == 0:
+            output_file.write("datatype;iterations;runtimes;EnergyByDomain_J\n")
+         output_file.write(
+            f"{datatype};{iterations};{runtimes};"
+            f"{json.dumps(energy_by_domain, sort_keys=True)}\n"
+         )
+
+      power_filename = f"gemm_power_{grid_size}x{grid_size}_{device}.csv"
+      with open(power_filename, "a") as output_file:
+         if output_file.tell() == 0:
+            output_file.write("datatype;iterations;runtimes;AveragePowerByDomain_mW\n")
+         output_file.write(
+            f"{datatype};{iterations};{runtimes};"
+            f"{json.dumps(power_by_domain_mw, sort_keys=True)}\n"
+         )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the OpenVINO GEMM model.")
