@@ -27,52 +27,42 @@ import openvino as ov
 
 def read_rapl_counters():
     powercap_path = Path("/sys/class/powercap")
-    domain_paths = []
-    package_paths = [
+    domain_paths = [
         *powercap_path.glob("intel-rapl:*"),
         *powercap_path.glob("intel-rapl-mmio:*"),
     ]
-    for package_path in package_paths:
-        domain_paths.extend([
-            package_path,
-            *package_path.glob("intel-rapl:*"),
-            *package_path.glob("intel-rapl-mmio:*"),
-        ])
-
-    counter_files = [
-        domain_path / field
-        for domain_path in domain_paths
-        for field in ("name", "energy_uj", "max_energy_range_uj")
-        if all(
-            (domain_path / required_field).is_file()
-            for required_field in ("name", "energy_uj", "max_energy_range_uj")
-        )
-    ]
-    if not counter_files:
-        return None
-
-    try:
-        values = [counter_file.read_text().strip() for counter_file in counter_files]
-    except OSError:
-        try:
-            result = subprocess.run(
-                ["sudo", "-n", "cat", *(str(counter_file) for counter_file in counter_files)],
-                capture_output=True,
-                check=True,
-                text=True,
-            )
-        except (OSError, subprocess.CalledProcessError):
-            return None
-        values = result.stdout.splitlines()
-
-    if len(values) != len(counter_files):
-        return None
+    for parent_path in tuple(domain_paths):
+        domain_paths.extend(parent_path.glob("intel-rapl:*"))
+        domain_paths.extend(parent_path.glob("intel-rapl-mmio:*"))
+    domain_paths = list(dict.fromkeys(domain_paths))
 
     counters = {}
-    for index in range(0, len(values), 3):
+    for domain_path in domain_paths:
+        counter_files = [
+            domain_path / "name",
+            domain_path / "energy_uj",
+            domain_path / "max_energy_range_uj",
+        ]
+        if not all(counter_file.is_file() for counter_file in counter_files):
+            continue
         try:
-            name, energy_uj, max_energy_uj = values[index:index + 3]
-            counters[f"{name}_{counter_files[index].parent.name}"] = (
+            values = [counter_file.read_text().strip() for counter_file in counter_files]
+        except OSError:
+            try:
+                result = subprocess.run(
+                    ["sudo", "-n", "cat", *(str(counter_file) for counter_file in counter_files)],
+                    capture_output=True,
+                    check=True,
+                    text=True,
+                )
+            except (OSError, subprocess.CalledProcessError):
+                continue
+            values = result.stdout.splitlines()
+        if len(values) != 3:
+            continue
+        try:
+            name, energy_uj, max_energy_uj = values
+            counters[f"{name}_{domain_path.name}"] = (
                 int(energy_uj),
                 int(max_energy_uj),
             )
