@@ -28,8 +28,16 @@ import numpy as np
 def read_rapl_counters():
    powercap_path = Path("/sys/class/powercap")
    domain_paths = []
-   for package_path in powercap_path.glob("intel-rapl:*"):
-      domain_paths.extend([package_path, *package_path.glob("intel-rapl:*")])
+   package_paths = [
+      *powercap_path.glob("intel-rapl:*"),
+      *powercap_path.glob("intel-rapl-mmio:*"),
+   ]
+   for package_path in package_paths:
+      domain_paths.extend([
+         package_path,
+         *package_path.glob("intel-rapl:*"),
+         *package_path.glob("intel-rapl-mmio:*"),
+      ])
 
    counter_files = [
       domain_path / field
@@ -150,7 +158,7 @@ def main(grid_size, iterations, runtimes, datatype, device):
       print(f"RAPL energy for {runtimes} inference run(s): {json.dumps(energy_by_domain, sort_keys=True)} J")
       print(f"Average RAPL power: {json.dumps(power_by_domain_mw, sort_keys=True)} mW")
    else:
-      print("RAPL energy unavailable; run with MEASURE_ENERGY=1 to access root-only counters.")
+      print("RAPL counters could not be read; check powercap sysfs permissions and sudo authorization.")
    print("****************************************************************************************************************************")
 
    log_filename = f"jacobi_{grid_size}x{grid_size}_{device}.csv"
